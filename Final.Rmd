@@ -1,0 +1,258 @@
+```{r}
+library(spotifyr)
+library(tidyverse)
+library(modelr)
+library(tree)
+Sys.setenv(SPOTIFY_CLIENT_ID = '384f4d780c17494c8dce22ed7c851c8e')
+Sys.setenv(SPOTIFY_CLIENT_SECRET = '08a9f1a9bff94ff393e0256f9efe7285')
+
+access_token <- get_spotify_access_token()
+```
+# An Investigation into Spotify Song Metrics
+
+In order to provide their users with the best possible listening experience, Spotify has aggregated a fair amount of data on both the audio content they
+provide, and their users.  For instance, much of what spotify is known for is their ability to recommend their users new songs to listen to based on their music selections in the past.  
+They’re able to do this, and well I might add, in part by comparing the tastes of all their users, and recognizing where user tastes overlap.  If I listen to Adele, Sam
+Smith, and Beach House, and you listen to Adele and Sam Smith, Spotify may recommend you listen to Beach House.  But this “overlap analysis” is not the only process by which Spotify understands user
+listening trends.  They also keep track of specific auditory qualities for each one of their songs, podcasts, even videos. Unfortunately, Spotify does not make public the
+entirety of what I’m sure is a massive catalog of song metrics and user data, with hundreds more metrics than what they publish on their Web API.  It’s disappointing that we
+are unable to look under the hood of how Spotify calculates all these metrics, or how wide their analytical web spans, but I suppose it is our task to make sense of the data
+they’ve provided us.  The song metrics of interest to this investigator are the following: danceability, acousticness, speechiness, instrumentalness, liveness, valence,
+energy, key, loudness, mode, tempo, duration_ms, time_signature, and pop.  Most of these metrics are calculated on a scale from 0 to 1.  Danceability strictly refers to how
+easy a song is to dance along to: does it have a consistent rhythm, is the beat strong, is it high energy?  High acousticness means a less “electronically produced” track. 
+While speechiness and instrumentalness are in theory inverses of one another, where one denotes the presence of speech and the other the absence of it, we find
+$$
+1-Speechiness\neq Instrumentalness.
+$$
+Liveness denotes how much a recording sounds like it was recorded live, say at a concert.  High Valence means a more happy, cheerful, euphoric track.  Low
+Valence might mean a more sad, low energy, or angry track.  It’s metrics like this one that I’m sure are calculated using other metrics like energy, and
+others that we are not privy to.   It is important to keep this in mind while performing analysis, as there is good potential for correlation between our
+variables.  High energy track tracks should be faster, louder, and noisier than low energy ones.  Key is classified with a number 0 through 10, where 0 is
+the key of C, 1 is C#, 2 is D etc.  Loudness is given as an amplitude attenuation value, so that large negative values are quieter than smaller negative
+values.  Mode is given as either a 0 or 1, denoting a Minor or Major key. Tempo is given in beats per minute, which could in theory range anywhere from 0
+to values in the hundreds.  Duration_ms is the track’s duration in milliseconds, and time_signature is indeed its time signature (or spotify’s best guess
+at what that might be, never accounting for multiple time signatures or even their non-existence).  Finally, the pop metric denotes the track’s
+popularity: how often do users listen to the track? This is given on a scale of 0 to 100.  For perspective, Billie Eilish’s song Bad Guy has a popularity
+value of 100 at the time this paper was written.  Led Zeppelin’s Stairway to Heaven has a popularity of 78.  My main endeavor in this project is to
+discover how, if at all, we might predict the popularity of a song given these metrics.  I do this by utilizing regression tree models, along with the
+lasso shrinkage method for linear models.  Based on what I assume to already know about audio qualities such as these we are using, and their potential to
+effect their songs popularity, I expect our regression tree models to perform much better than our linear models.  Music popularity tends to be more
+compartmentalized in its responses to predictor variation, also more interdependently complicated.  For instance, we may have a genre of music which is
+characterized by a certain constant song metric value.  This genre's popularity might have a totally different relationship with the rest of the
+predictors than another genre.  Tree fits will better model this "compartmentalized" nature of our response, predictor relationship than linear fits to
+our data. 
+
+First we must pull and clean our data.  I chose to pull data specifically on the top 50 viral songs at the moment from a few countries around the globe. 
+These countries were Argentina, Belgium, Japan, the US, and Vietnam.  I also pulled data on the top 50 songs globally.  Unfortunately, the data sets of
+individual countries were too small to perform meaningful analysis on.  
+```{r}
+#Global Viral Songs
+global_top50 = get_playlist_tracks(playlist_id ='37i9dQZEVXbLiRSasKsNU9')
+g_id=global_top50$track.id
+g_track_pop=global_top50$track.popularity
+g_track=rep(0,18)
+g_track_feats=rep(0,18)
+for(i in 1:50){
+  g_track=get_track_audio_features(g_id[i])
+  g_track_feats=rbind(g_track_feats,g_track)
+  
+}
+g_track_feat=g_track_feats[-1,]
+g_tracks1=cbind(g_track_feat,g_track_pop)
+g_tracks=subset(g_tracks1, select=-c(type,id,uri,track_href,analysis_url))
+colnames(g_tracks)[colnames(g_tracks)=="g_track_pop"] <- "pop"
+g_tracks
+```
+
+```{r}
+#Argentina Viral Songs
+argent_top50 = get_playlist_tracks(playlist_id ='37i9dQZEVXbJajpaXyaKll')
+a_id=argent_top50$track.id
+a_track_pop=argent_top50$track.popularity
+a_track=rep(0,18)
+a_track_feats=rep(0,18)
+for(i in 1:50){
+  a_track=get_track_audio_features(a_id[i])
+  a_track_feats=rbind(a_track_feats,a_track)
+  
+}
+a_track_feat=a_track_feats[-1,]
+a_tracks1=cbind(a_track_feat,a_track_pop)
+a_tracks=subset(a_tracks1, select=-c(type,id,uri,track_href,analysis_url))
+colnames(a_tracks)[colnames(a_tracks)=="a_track_pop"] <- "pop"
+```
+
+```{r}
+#Belgium Viral Songs
+belgium_top50 = get_playlist_tracks(playlist_id ='37i9dQZEVXbJx9hUtTN0Sj')
+b_id=belgium_top50$track.id
+b_track_pop=belgium_top50$track.popularity
+b_track=rep(0,18)
+b_track_feats=rep(0,18)
+for(i in 1:50){
+  b_track=get_track_audio_features(b_id[i])
+  b_track_feats=rbind(b_track_feats,b_track)
+  
+}
+b_track_feat=b_track_feats[-1,]
+b_tracks1=cbind(b_track_feat,b_track_pop)
+b_tracks=subset(b_tracks1, select=-c(type,id,uri,track_href,analysis_url))
+colnames(b_tracks)[colnames(b_tracks)=="b_track_pop"] <- "pop"
+```
+
+```{r}
+#Japan Viral Songs
+japan_top50 = get_playlist_tracks(playlist_id ='37i9dQZEVXbINTEnbFeb8d')
+j_id=japan_top50$track.id
+j_track_pop=japan_top50$track.popularity
+j_track=rep(0,18)
+j_track_feats=rep(0,18)
+for(i in 1:50){
+  j_track=get_track_audio_features(j_id[i])
+  j_track_feats=rbind(j_track_feats,j_track)
+  
+}
+j_track_feat=j_track_feats[-1,]
+j_tracks1=cbind(j_track_feat,j_track_pop)
+j_tracks=subset(j_tracks1, select=-c(type,id,uri,track_href,analysis_url))
+colnames(j_tracks)[colnames(j_tracks)=="j_track_pop"] <- "pop"
+```
+
+```{r}
+#US Viral Songs
+us_top50 = get_playlist_tracks(playlist_id ='37i9dQZEVXbKuaTI1Z1Afx')
+u_id=us_top50$track.id
+u_track_pop=us_top50$track.popularity
+u_track=rep(0,18)
+u_track_feats=rep(0,18)
+for(i in 1:50){
+  u_track=get_track_audio_features(u_id[i])
+  u_track_feats=rbind(u_track_feats,u_track)
+  
+}
+u_track_feat=u_track_feats[-1,]
+u_tracks1=cbind(u_track_feat,u_track_pop)
+u_tracks=subset(u_tracks1, select=-c(type,id,uri,track_href,analysis_url))
+colnames(u_tracks)[colnames(u_tracks)=="u_track_pop"] <- "pop"
+```
+
+```{r}
+#Vietnam Viral Songs
+viet_top50 = get_playlist_tracks(playlist_id ='37i9dQZEVXbL1G1MbPav3j')
+v_id=viet_top50$track.id
+v_track_pop=viet_top50$track.popularity
+v_track=rep(0,18)
+v_track_feats=rep(0,18)
+for(i in 1:50){
+  v_track=get_track_audio_features(v_id[i])
+  v_track_feats=rbind(v_track_feats,v_track)
+  
+}
+v_track_feat=v_track_feats[-1,]
+v_tracks1=cbind(v_track_feat,v_track_pop)
+v_tracks=subset(v_tracks1, select=-c(type,id,uri,track_href,analysis_url))
+colnames(v_tracks)[colnames(v_tracks)=="v_track_pop"] <- "pop"
+```
+
+```{r}
+set.seed(3)
+tracks=rbind(a_tracks,b_tracks,j_tracks,u_tracks,v_tracks,g_tracks)
+
+rp=resample_partition(tracks, c(train = 0.8, test = 0.2))
+training_set = as_tibble(rp$train)
+testing_set = as_tibble(rp$test)
+
+tree_fit = tree(pop~., training_set)
+summary(tree_fit)
+mse(tree_fit,testing_set)
+plot(tree_fit, type = "uniform")
+text(tree_fit, pretty = 1, all = TRUE, cex = 0.7)
+
+cv_tree=cv.tree(tree_fit)
+min(cv_tree$dev)
+cv_tree
+```
+Plotting our first regression tree without any pruning, there are a few surprising things we notice right off the bat.  Firstly, speechiness appears to be
+our most important variable, making up the first internal node in our decision tree.  Personally this is surprising to me, as I would have expected a
+metric like danceability or valence to be one of the more important predictors of popularity.  In fact, valence only appears in our decision tree twice.
+Energy and duration make up our second layer internal nodes, revealing their importance in predicting popularity as well.  Note that longer songs are less
+popular than shorter songs.  This model of size 23 produces an MSE of 291, however using cross validation, we find a model of size 20 terminal nodes might
+produce better popularity estimates.  
+```{r}
+prunetree_fit = prune.tree(tree_fit, best=20)
+summary(prunetree_fit)
+plot(prunetree_fit, type = "uniform")
+text(prunetree_fit, pretty = 1, all = TRUE, cex = 0.7)
+mse(prunetree_fit,testing_set)
+```
+Pruning our original tree to down in size to 20 terminal nodes, we decrease our mse to 280, an admitedly not vast improvement from our earlier model.  
+```{r}
+error=rep(0,22)
+for(i in 2:23){
+  fit=prune.tree(tree_fit,best = i)
+  error[i-1]=mse(fit,testing_set)
+}
+plot(c(2:23),error)
+```
+Just to be sure we're getting the best model, we also plot our tree size against their mse, and find a tree size of 17 terminal nodes to actually be best
+at predicting song popularity.  
+```{r}
+prunetree_fit = prune.tree(tree_fit, best=17)
+summary(prunetree_fit)
+plot(prunetree_fit, type = "uniform")
+text(prunetree_fit, pretty = 1, all = TRUE, cex = 0.7)
+mse(prunetree_fit,testing_set)
+```
+  We find our regression tree model of size 17 produces an mse of 259.
+```{r}
+set.seed(1)
+library(randomForest)
+bag_fit=randomForest(pop~., data = training_set, mtry=13, importance = TRUE)
+bag_fit
+mse(bag_fit,testing_set)
+
+importance(bag_fit)
+```
+  We now try bagging (boosting) tree models to analyze this data.  This decreases our mse significantly down to 210.  We find the most important
+predictors for predicting popularity this way are danceability, speechiness, liveness, and duration_ms.  
+```{r}
+set.seed(1)
+library(randomForest)
+rf_fit=randomForest(pop~., data = training_set, importance = TRUE)
+rf_fit
+mse(rf_fit,testing_set)
+
+importance(rf_fit)
+```
+   Generating a random forest model, we get our lowest mse yet at 208.  Generating now our linear models, we first try fitting a model with every single
+one of our variables. We do this in part to get a sense of how each one of our variables is correlated, possitively or negatively, with our population.  
+```{r}
+linear_fit=lm(pop~., data=training_set)
+mse(linear_fit,testing_set)
+linear_fit
+```
+   This simple linear regression model produces an mse of 308 (rather poor).  The variables we find to be significantly possitively correlated with
+population are danceability, loudness, speechiness, and time_signature.  The variables we find to be significantly negatively correlated with population
+are energy, mode, acousticness, liveness, and valence.  The variables we find with beta values close to zero are not significantly correlated with
+population, and these are key, instrumentalness, tempo, and surprisingly, one of our more important variables in our tree model, duration_ms.  
+```{r}
+library(glmnet)
+set.seed(3)
+x <- model.matrix(pop ~ ., training_set)
+y <- training_set$pop
+x1 <- model.matrix(pop ~ ., testing_set)
+y1 = testing_set$pop
+cv_out1 = cv.glmnet(x,y,alpha=1)
+plot(cv_out1)
+(bestlam1=cv_out1$lambda.min)
+lasso_fit <- glmnet(x, y, alpha = 1)
+lasso_pred = predict(lasso_fit, s=bestlam1,newx=x1)
+(lasso_pred1 = predict(lasso_fit, type="coefficients", s=bestlam1))
+mean((lasso_pred-y1)^2)
+```
+We next utilize the lasso shrinkage method.  We use cross validation to choose our best lambda value, and find this value to be 0.1015576. Using this
+lambda value, we find our mean squared error to be 311.  This model lambda value also did not shrink any of our variable coefficients to zero.  
+
+## Conclusions
+     As we predicted, we find our tree models consistently provide more accurate methods of predicting song popularity than our linear and shrunken linear
+models.
